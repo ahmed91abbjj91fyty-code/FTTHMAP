@@ -3,10 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة وتتبع شبكة الإنترنت</title>
+    <title>نظام إدارة وتتبع شبكة الإنترنت - السحابي</title>
     <!-- استدعاء مكتبة Leaflet للخرائط -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- استدعاء مكتبة Supabase للاتصال السحابي -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
     <style>
         body {
@@ -61,29 +63,18 @@
             width: 100%;
             font-weight: bold;
         }
-        .btn-danger {
-            background: #ef4444;
-            color: white;
-            border: none;
-            padding: 6px 10px;
-            cursor: pointer;
-            border-radius: 4px;
-            width: 100%;
-            font-weight: bold;
-            margin-top: 5px;
-        }
     </style>
 </head>
 <body>
 
-    <div id="header">لوحة التحكم - إدارة الشبكة وتتبع عمال الصيانة</div>
+    <div id="header">لوحة التحكم - متصل بقاعدة البيانات السحابية</div>
     
     <div id="main-container">
         <!-- الشريط الجانبي للإحصائيات وأدوات التتبع -->
         <div id="sidebar">
             <h3>لوحة الإدارة</h3>
             <p style="font-size: 13px; color: #475569; line-height: 1.4;">
-                انقر على الخريطة لإضافة كابينة أو مشترك. واستخدم الزر أدناه لتفعيل تتبع موقعك الميداني (أو محاكاة حركة العامل).
+                البيانات الآن تُحفظ بشكل سحابي وتظهر فوراً لجميع المستخدمين. انقر على الخريطة للإضافة.
             </p>
             <div class="stats-box">
                 <p><b>عدد الكابينات:</b> <span id="cab-count">0</span></p>
@@ -95,8 +86,6 @@
             <h4>نظام تتبع العمال</h4>
             <button class="btn-primary" onclick="startLiveTracking()">بدء تتبعي الميداني (GPS)</button>
             <div id="tracking-status" style="font-size: 12px; color: #047857; font-weight: bold; margin-top: 5px;"></div>
-
-            <button class="btn-danger" onclick="clearAllData()">مسح كافة البيانات</button>
         </div>
 
         <!-- الخريطة -->
@@ -104,7 +93,14 @@
     </div>
 
     <script>
-        // 1. تهيئة الخريطة بمركز بغداد
+        // 1. إعدادات الاتصال بقاعدة بيانات Supabase السحابية
+        const SUPABASE_URL = 'https://zoqbqaefkyznsxhcaakk.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvcWJxYWVma3l6bnN4aGNhYWtrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MzYzMDcsImV4cCI6MjEwODAxMjMwN30.drwpDj0CTp766eK3zs4PdYhGGzBmJ_wmVCdPdcJNvW8';
+
+        const { createClient } = supabase;
+        const _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // 2. تهيئة الخريطة بمركز بغداد
         var map = L.map('map').setView([33.3250, 44.4300], 13);
 
         L.tileLayer('https://tile.openstreetmap.de/{z}/{x}/{y}.png', {
@@ -112,20 +108,20 @@
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        // تحميل النقاط المخزنة مسبقاً
-        let savedPoints = JSON.parse(localStorage.getItem('net_points')) || [];
+        let cabCount = 0;
+        let subCount = 0;
 
         function updateCounters() {
-            let cabs = savedPoints.filter(p => p.type === 'cabinet').length;
-            let subs = savedPoints.filter(p => p.type === 'subscriber').length;
-            document.getElementById('cab-count').innerText = cabs;
-            document.getElementById('sub-count').innerText = subs;
+            document.getElementById('cab-count').innerText = cabCount;
+            document.getElementById('sub-count').innerText = subCount;
         }
 
+        // دالة رسم النقطة على الخريطة
         function renderPoint(point) {
             if (point.type === 'cabinet') {
                 var marker = L.marker([point.lat, point.lng]).addTo(map);
                 marker.bindPopup(`<b>كابينة: ${point.name}</b><br>الإحداثيات: ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`);
+                cabCount++;
             } else {
                 var marker = L.circleMarker([point.lat, point.lng], {
                     color: 'green',
@@ -134,21 +130,34 @@
                     radius: 8
                 }).addTo(map);
                 marker.bindPopup(`<b>مشترك: ${point.name}</b><br>الإحداثيات: ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`);
+                subCount++;
+            }
+            updateCounters();
+        }
+
+        // 3. جلب البيانات من السحابة عند تحميل الصفحة
+        async function fetchPointsFromCloud() {
+            let { data, error } = await _supabase.from('points').select('*');
+            if (error) {
+                console.error('خطأ في جلب البيانات:', error);
+            } else {
+                cabCount = 0;
+                subCount = 0;
+                data.forEach(point => renderPoint(point));
             }
         }
 
-        savedPoints.forEach(point => renderPoint(point));
-        updateCounters();
+        fetchPointsFromCloud();
 
-        // 2. حدث النقر على الخريطة لإضافة موقع جديد
+        // 4. حدث النقر على الخريطة لإضافة موقع جديد وحفظه سحابياً
         map.on('click', function(e) {
             var lat = e.latlng.lat;
             var lng = e.latlng.lng;
 
             var formHtml = `
                 <div style="font-family: Arial; direction: rtl; text-align: right; min-width: 200px;">
-                    <h4 style="margin: 0 0 10px 0; color: #1e293b;">إضافة موقع جديد</h4>
-                    <form onsubmit="addNewPoint(event, ${lat}, ${lng})">
+                    <h4 style="margin: 0 0 10px 0; color: #1e293b;">إضافة موقع جديد (سحابي)</h4>
+                    <form onsubmit="addNewPointToCloud(event, ${lat}, ${lng})">
                         <label style="font-size: 13px; font-weight: bold;">نوع الموقع:</label><br>
                         <select id="input-type" style="width: 100%; padding: 6px; margin-top: 4px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ccc;">
                             <option value="cabinet">كابينة انترنت</option>
@@ -158,7 +167,7 @@
                         <label style="font-size: 13px; font-weight: bold;">الاسم / الرمز:</label><br>
                         <input type="text" id="input-name" required placeholder="مثال: C-102 أو محمد كريم" style="width: 100%; padding: 6px; margin-top: 4px; margin-bottom: 12px; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box;"><br>
                         
-                        <button type="submit" style="background: #2563eb; color: white; border: none; padding: 8px 14px; cursor: pointer; border-radius: 4px; width: 100%; font-weight: bold;">حفظ على الخريطة</button>
+                        <button type="submit" style="background: #2563eb; color: white; border: none; padding: 8px 14px; cursor: pointer; border-radius: 4px; width: 100%; font-weight: bold;">حفظ في السحابة</button>
                     </form>
                 </div>
             `;
@@ -169,21 +178,27 @@
                 .openOn(map);
         });
 
-        window.addNewPoint = function(event, lat, lng) {
+        // 5. دالة إرسال البيانات مباشرة إلى جدول Supabase
+        window.addNewPointToCloud = async function(event, lat, lng) {
             event.preventDefault();
+            
             var type = document.getElementById('input-type').value;
             var name = document.getElementById('input-name').value;
 
             let newPoint = { type, name, lat, lng };
-            savedPoints.push(newPoint);
-            localStorage.setItem('net_points', JSON.stringify(savedPoints));
 
-            renderPoint(newPoint);
-            updateCounters();
-            map.closePopup();
+            // إدخال البيانات في جدول points في Supabase
+            const { data, error } = await _supabase.from('points').insert([newPoint]);
+
+            if (error) {
+                alert('حدث خطأ أثناء الحفظ بالسحابة: ' + error.message);
+            } else {
+                renderPoint(newPoint);
+                map.closePopup();
+            }
         };
 
-        // 3. نظام تتبع عمال الصيانة الحي (Live Tracking)
+        // 6. نظام تتبع عمال الصيانة الحي
         let techMarker = null;
         let watchId = null;
 
@@ -195,7 +210,6 @@
 
             document.getElementById('tracking-status').innerText = "جاري الاتصال بالأقمار الصناعية وتحديد الموقع...";
 
-            // مراقبة حركة الموقع الجغرافي للمتصفح/الهاتف بشكل مستمر
             watchId = navigator.geolocation.watchPosition(
                 function(position) {
                     let lat = position.coords.latitude;
@@ -204,7 +218,6 @@
                     document.getElementById('tracking-status').innerText = "🟢 التتبع نشط: يتم تحديث الموقع بنجاح";
 
                     if (!techMarker) {
-                        // إنشاء مؤشر مميز لعامل الصيانة (لون أحمر وامض أو دائرة مميزة)
                         techMarker = L.circleMarker([lat, lng], {
                             color: '#dc2626',
                             fillColor: '#ef4444',
@@ -213,9 +226,8 @@
                             weight: 3
                         }).addTo(map);
                         techMarker.bindPopup("<b>عامل الصيانة (أنت)</b><br>الموقع الميداني الحالي").openPopup();
-                        map.setView([lat, lng], 15); // تحريك الخريطة لموقع العامل
+                        map.setView([lat, lng], 15);
                     } else {
-                        // تحديث موقع المؤشر مباشرة إذا تحرك العامل
                         techMarker.setLatLng([lat, lng]);
                     }
                 },
@@ -228,13 +240,6 @@
                     timeout: 10000
                 }
             );
-        };
-
-        window.clearAllData = function() {
-            if (confirm('هل أنت متأكد من مسح جميع البيانات؟')) {
-                localStorage.removeItem('net_points');
-                location.reload();
-            }
         };
     </script>
 </body>
