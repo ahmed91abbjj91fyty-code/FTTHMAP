@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة وتتبع شبكة الإنترنت - السحابي المتكامل</title>
+    <title>نظام إدارة وتتبع شبكة الإنترنت - مع ميزة الفلترة</title>
     <!-- استدعاء مكتبة Leaflet للخرائط -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -63,6 +63,24 @@
             width: 100%;
             font-weight: bold;
         }
+        .btn-filter {
+            background: #475569;
+            color: white;
+            border: none;
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            flex: 1;
+        }
+        .btn-filter.active {
+            background: #0284c7;
+        }
+        .filter-container {
+            display: flex;
+            gap: 5px;
+        }
         .btn-danger {
             background: #dc2626;
             color: white;
@@ -87,18 +105,29 @@
 </head>
 <body>
 
-    <div id="header">لوحة التحكم - إدارة وتعديل شبكة الإنترنت</div>
+    <div id="header">لوحة التحكم - إدارة وتصفية الشبكة ميدانياً</div>
     
     <div id="main-container">
-        <!-- الشريط الجانبي للإحصائيات وأدوات التتبع -->
+        <!-- الشريط الجانبي للإحصائيات وأدوات التصفية -->
         <div id="sidebar">
             <h3>لوحة الإدارة</h3>
             <p style="font-size: 13px; color: #475569; line-height: 1.4;">
-                انقر على أي نقطة في الخريطة لتعديلها أو حذفها، أو انقر في مكان فارغ لإضافة موقع جديد.
+                انقر على الخريطة للإضافة، أو استخدم أزرار التصفية أدناه للتحكم بما يظهر على الخريطة.
             </p>
+            
             <div class="stats-box">
                 <p><b>عدد الكابينات:</b> <span id="cab-count">0</span></p>
                 <p><b>عدد المشتركين:</b> <span id="sub-count">0</span></p>
+            </div>
+
+            <hr style="border: 0; border-top: 1px solid #cbd5e1;">
+
+            <!-- قسم تصفية العرض (Filters) -->
+            <h4>تصفية العرض</h4>
+            <div class="filter-container">
+                <button id="filter-all" class="btn-filter active" onclick="setFilter('all')">الكل</button>
+                <button id="filter-cabinet" class="btn-filter" onclick="setFilter('cabinet')">الكابينات</button>
+                <button id="filter-subscriber" class="btn-filter" onclick="setFilter('subscriber')">المشتركين</button>
             </div>
 
             <hr style="border: 0; border-top: 1px solid #cbd5e1;">
@@ -115,7 +144,7 @@
     <script>
         // 1. إعدادات الاتصال بقاعدة بيانات Supabase السحابية
         const SUPABASE_URL = 'https://zoqbqaefkyznsxhcaakk.supabase.co';
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvcWJxYWVma3l6bnN4aGNhYWtrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MzYzMDcsImV4cCI6MjEwODAxMjMwN30.drwpDj0CTp766eK3zs4PdYhGGzBmJ_wmVCdPdcJNvW8';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvcWJxYWVma3l6bnN4aGNhYWtrIksicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MzYzMDcsImV4cCI6MjEwODAxMjMwN30.drwpDj0CTp766eK3zs4PdYhGGzBmJ_wmVCdPdcJNvW8';
 
         const { createClient } = supabase;
         const _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -128,24 +157,47 @@
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        let cabCount = 0;
-        let subCount = 0;
-        let markersMap = {}; // الاحتفاظ بمرجع لكل علامة على الخريطة عبر الـ ID
+        let allPoints = []; // تخزين جميع النقاط محلياً لتسهيل الفلترة
+        let markersMap = {}; // الاحتفاظ بمرجع لكل علامة عبر الـ ID
+        let currentFilter = 'all'; // الفلتر الافتراضي عرض الكل
 
         function updateCounters() {
-            document.getElementById('cab-count').innerText = cabCount;
-            document.getElementById('sub-count').innerText = subCount;
+            let cabs = allPoints.filter(p => p.type === 'cabinet').length;
+            let subs = allPoints.filter(p => p.type === 'subscriber').length;
+            document.getElementById('cab-count').innerText = cabs;
+            document.getElementById('sub-count').innerText = subs;
         }
 
-        // دالة رسم النقطة على الخريطة
-        function renderPoint(point) {
-            // إذا كانت العلامة موجودة مسبقاً، قم بإزالتها لتحديثها
-            if (markersMap[point.id]) {
-                map.removeLayer(markersMap[point.id]);
-                if (point.type === 'cabinet') cabCount--;
-                else subCount--;
-            }
+        // دالة تغيير الفلتر عند الضغط على الأزرار
+        window.setFilter = function(filterType) {
+            currentFilter = filterType;
+            
+            // تحديث تصميم الأزرار (Active state)
+            document.querySelectorAll('.btn-filter').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`filter-${filterType}`).classList.add('active');
 
+            // اعادة رسم أو إخفاء/إظهار النقاط حسب الفلتر المختار
+            refreshMapMarkers();
+        };
+
+        // دالة رسم وإدارة ظهور النقاط بناءً على الفلتر الحالي
+        function refreshMapMarkers() {
+            // إزالة جميع العلامات الحالية من الخريطة مؤقتاً
+            for (let id in markersMap) {
+                map.removeLayer(markersMap[id]);
+            }
+            markersMap = {};
+
+            // رسم النقاط المطابقة للفلتر فقط
+            allPoints.forEach(point => {
+                if (currentFilter === 'all' || currentFilter === point.type) {
+                    createMarkerOnMap(point);
+                }
+            });
+            updateCounters();
+        }
+
+        function createMarkerOnMap(point) {
             var marker;
             var popupContent = `
                 <div style="font-family: Arial; direction: rtl; text-align: right; min-width: 180px;">
@@ -163,7 +215,6 @@
 
             if (point.type === 'cabinet') {
                 marker = L.marker([point.lat, point.lng]).addTo(map);
-                cabCount++;
             } else {
                 marker = L.circleMarker([point.lat, point.lng], {
                     color: 'green',
@@ -171,43 +222,38 @@
                     fillOpacity: 0.8,
                     radius: 8
                 }).addTo(map);
-                subCount++;
             }
 
             marker.bindPopup(popupContent);
             markersMap[point.id] = marker;
-            updateCounters();
         }
 
-        // 3. جلب البيانات الأولية عند تحميل الصفحة
+        // 3. جلب البيانات الأولية من السحابة
         async function fetchPointsFromCloud() {
             let { data, error } = await _supabase.from('points').select('*');
             if (!error && data) {
-                cabCount = 0;
-                subCount = 0;
-                markersMap = {};
-                data.forEach(point => renderPoint(point));
+                allPoints = data;
+                refreshMapMarkers();
             }
         }
 
         fetchPointsFromCloud();
 
-        // 4. الاستماع الفوري للتغيرات (إضافة، تعديل، حذف)
+        // 4. الاستماع الفوري للتغيرات (Realtime)
         _supabase
             .channel('public:points')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'points' }, payload => {
-                renderPoint(payload.new);
+                allPoints.push(payload.new);
+                refreshMapMarkers();
             })
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'points' }, payload => {
-                renderPoint(payload.new);
+                let index = allPoints.findIndex(p => p.id === payload.new.id);
+                if (index !== -1) allPoints[index] = payload.new;
+                refreshMapMarkers();
             })
             .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'points' }, payload => {
-                let deletedId = payload.old.id;
-                if (markersMap[deletedId]) {
-                    map.removeLayer(markersMap[deletedId]);
-                    // إعادة حساب العدادات بناء على نوع العنصر المحذوف
-                    fetchPointsFromCloud(); // الطريقة الأبسط والأضمن لتحديث العدادات بدقة
-                }
+                allPoints = allPoints.filter(p => p.id !== payload.old.id);
+                refreshMapMarkers();
             })
             .subscribe();
 
@@ -240,7 +286,6 @@
                 .openOn(map);
         });
 
-        // دالة حفظ نقطة جديدة
         window.addNewPointToCloud = async function(event, lat, lng) {
             event.preventDefault();
             var type = document.getElementById('input-type').value;
@@ -254,7 +299,6 @@
             }
         };
 
-        // 6. دالة تعديل اسم النقطة
         window.updatePointName = async function(id) {
             var newName = document.getElementById(`edit-name-${id}`).value;
             if (!newName) {
@@ -274,7 +318,6 @@
             }
         };
 
-        // 7. دالة حذف النقطة
         window.deletePoint = async function(id) {
             if (!confirm('هل أنت متأكد من حذف هذا الموقع نهائياً؟')) return;
 
@@ -286,16 +329,11 @@
             if (error) {
                 alert('خطأ أثناء الحذف: ' + error.message);
             } else {
-                if (markersMap[id]) {
-                    map.removeLayer(markersMap[id]);
-                    delete markersMap[id];
-                }
                 map.closePopup();
-                fetchPointsFromCloud();
             }
         };
 
-        // 8. نظام تتبع عمال الصيانة الحي
+        // 6. نظام تتبع عمال الصيانة الحي
         let techMarker = null;
         let watchId = null;
 
