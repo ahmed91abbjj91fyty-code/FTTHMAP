@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة وتتبع شبكة الإنترنت - مع ميزة الفلترة</title>
+    <title>نظام إدارة وتتبع شبكة الإنترنت - مستقر ومزامن</title>
     <!-- استدعاء مكتبة Leaflet للخرائط -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -101,11 +101,18 @@
             font-weight: bold;
             font-size: 12px;
         }
+        /* أيقونة مخصصة وثابتة لموقع عامل الصيانة لتجنب التذبذب عند الزوم */
+        .worker-marker-icon {
+            background-color: #ef4444;
+            border: 3px solid #ffffff;
+            border-radius: 50%;
+            box-shadow: 0 0 8px rgba(0,0,0,0.4);
+        }
     </style>
 </head>
 <body>
 
-    <div id="header">لوحة التحكم - إدارة وتصفية الشبكة ميدانياً</div>
+    <div id="header">لوحة التحكم - إدارة الشبكة التزامن المستمر</div>
     
     <div id="main-container">
         <!-- الشريط الجانبي للإحصائيات وأدوات التصفية -->
@@ -157,9 +164,10 @@
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        let allPoints = []; // تخزين جميع النقاط محلياً لتسهيل الفلترة
-        let markersMap = {}; // الاحتفاظ بمرجع لكل علامة عبر الـ ID
-        let currentFilter = 'all'; // الفلتر الافتراضي عرض الكل
+        let allPoints = []; // تخزين جميع النقاط محلياً
+        let markersMap = {}; // مرجع لكل علامة عبر الـ ID
+        let currentFilter = 'all'; 
+        let realtimeChannel = null;
 
         function updateCounters() {
             let cabs = allPoints.filter(p => p.type === 'cabinet').length;
@@ -168,27 +176,19 @@
             document.getElementById('sub-count').innerText = subs;
         }
 
-        // دالة تغيير الفلتر عند الضغط على الأزرار
         window.setFilter = function(filterType) {
             currentFilter = filterType;
-            
-            // تحديث تصميم الأزرار (Active state)
             document.querySelectorAll('.btn-filter').forEach(btn => btn.classList.remove('active'));
             document.getElementById(`filter-${filterType}`).classList.add('active');
-
-            // اعادة رسم أو إخفاء/إظهار النقاط حسب الفلتر المختار
             refreshMapMarkers();
         };
 
-        // دالة رسم وإدارة ظهور النقاط بناءً على الفلتر الحالي
         function refreshMapMarkers() {
-            // إزالة جميع العلامات الحالية من الخريطة مؤقتاً
             for (let id in markersMap) {
                 map.removeLayer(markersMap[id]);
             }
             markersMap = {};
 
-            // رسم النقاط المطابقة للفلتر فقط
             allPoints.forEach(point => {
                 if (currentFilter === 'all' || currentFilter === point.type) {
                     createMarkerOnMap(point);
@@ -237,25 +237,46 @@
             }
         }
 
-        fetchPointsFromCloud();
+        // 4. تفعيل وربط الـ Realtime
+        function initRealtimeSubscription() {
+            if (realtimeChannel) {
+                _supabase.removeChannel(realtimeChannel);
+            }
 
-        // 4. الاستماع الفوري للتغيرات (Realtime)
-        _supabase
-            .channel('public:points')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'points' }, payload => {
-                allPoints.push(payload.new);
-                refreshMapMarkers();
-            })
-            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'points' }, payload => {
-                let index = allPoints.findIndex(p => p.id === payload.new.id);
-                if (index !== -1) allPoints[index] = payload.new;
-                refreshMapMarkers();
-            })
-            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'points' }, payload => {
-                allPoints = allPoints.filter(p => p.id !== payload.old.id);
-                refreshMapMarkers();
-            })
-            .subscribe();
+            realtimeChannel = _supabase
+                .channel('public:points')
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'points' }, payload => {
+                    allPoints.push(payload.new);
+                    refreshMapMarkers();
+                })
+                .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'points' }, payload => {
+                    let index = allPoints.findIndex(p => p.id === payload.new.id);
+                    if (index !== -1) allPoints[index] = payload.new;
+                    refreshMapMarkers();
+                })
+                .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'points' }, payload => {
+                    allPoints = allPoints.filter(p => p.id !== payload.old.id);
+                    refreshMapMarkers();
+                })
+                .subscribe();
+        }
+
+        // تشغيل الجلب التلقائي والاشتراك اللحظي
+        fetchPointsFromCloud();
+        initRealtimeSubscription();
+
+        // 🟢 معالجة مشكلة قفل الشاشة وخمول الجهاز: إعادة الجلب والربط فور إعادة فتح الشاشة
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible') {
+                fetchPointsFromCloud();
+                initRealtimeSubscription();
+            }
+        });
+
+        window.addEventListener('focus', function() {
+            fetchPointsFromCloud();
+            initRealtimeSubscription();
+        });
 
         // 5. حدث النقر على الخريطة لإضافة موقع جديد
         map.on('click', function(e) {
@@ -333,9 +354,16 @@
             }
         };
 
-        // 6. نظام تتبع عمال الصيانة الحي
+        // 6. نظام تتبع عمال الصيانة الحي (مستقر وبدون اهتزاز عند الزوم)
         let techMarker = null;
         let watchId = null;
+
+        // أيقونة ثابتة الحجم تمنع التذبذب والقفز عند Zoom
+        const workerIcon = L.divIcon({
+            className: 'worker-marker-icon',
+            iconSize: [16, 16],
+            iconAnchor: [8, 8]
+        });
 
         window.startLiveTracking = function() {
             if (!navigator.geolocation) {
@@ -353,13 +381,7 @@
                     document.getElementById('tracking-status').innerText = "🟢 التتبع نشط: يتم تحديث الموقع بنجاح";
 
                     if (!techMarker) {
-                        techMarker = L.circleMarker([lat, lng], {
-                            color: '#dc2626',
-                            fillColor: '#ef4444',
-                            fillOpacity: 1,
-                            radius: 12,
-                            weight: 3
-                        }).addTo(map);
+                        techMarker = L.marker([lat, lng], { icon: workerIcon }).addTo(map);
                         techMarker.bindPopup("<b>عامل الصيانة (أنت)</b><br>الموقع الميداني الحالي").openPopup();
                         map.setView([lat, lng], 15);
                     } else {
