@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة وتتبع شبكة الإنترنت - السحابي المباشر</title>
+    <title>نظام إدارة وتتبع شبكة الإنترنت - السحابي المتكامل</title>
     <!-- استدعاء مكتبة Leaflet للخرائط -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -63,18 +63,38 @@
             width: 100%;
             font-weight: bold;
         }
+        .btn-danger {
+            background: #dc2626;
+            color: white;
+            border: none;
+            padding: 6px 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .btn-success {
+            background: #16a34a;
+            color: white;
+            border: none;
+            padding: 6px 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
 
-    <div id="header">لوحة التحكم - التزامن اللحظي المباشر</div>
+    <div id="header">لوحة التحكم - إدارة وتعديل شبكة الإنترنت</div>
     
     <div id="main-container">
         <!-- الشريط الجانبي للإحصائيات وأدوات التتبع -->
         <div id="sidebar">
             <h3>لوحة الإدارة</h3>
             <p style="font-size: 13px; color: #475569; line-height: 1.4;">
-                النقاط تظهر وتتزامن الآن لحظياً بين جميع الأجهزة بدون الحاجة لإعادة تحميل الصفحة.
+                انقر على أي نقطة في الخريطة لتعديلها أو حذفها، أو انقر في مكان فارغ لإضافة موقع جديد.
             </p>
             <div class="stats-box">
                 <p><b>عدد الكابينات:</b> <span id="cab-count">0</span></p>
@@ -110,6 +130,7 @@
 
         let cabCount = 0;
         let subCount = 0;
+        let markersMap = {}; // الاحتفاظ بمرجع لكل علامة على الخريطة عبر الـ ID
 
         function updateCounters() {
             document.getElementById('cab-count').innerText = cabCount;
@@ -118,20 +139,43 @@
 
         // دالة رسم النقطة على الخريطة
         function renderPoint(point) {
+            // إذا كانت العلامة موجودة مسبقاً، قم بإزالتها لتحديثها
+            if (markersMap[point.id]) {
+                map.removeLayer(markersMap[point.id]);
+                if (point.type === 'cabinet') cabCount--;
+                else subCount--;
+            }
+
+            var marker;
+            var popupContent = `
+                <div style="font-family: Arial; direction: rtl; text-align: right; min-width: 180px;">
+                    <h4 style="margin: 0 0 5px 0; color: #1e293b;">${point.type === 'cabinet' ? 'كابينة إنترنت' : 'مشترك جديد'}</h4>
+                    <p style="margin: 0 0 8px 0; font-size: 14px;"><b>الاسم:</b> ${point.name}</p>
+                    <p style="margin: 0 0 10px 0; font-size: 11px; color: #64748b;">الإحداثيات: ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}</p>
+                    
+                    <div style="margin-bottom: 8px;">
+                        <input type="text" id="edit-name-${point.id}" value="${point.name}" placeholder="الاسم الجديد" style="width: 90%; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px; margin-bottom: 5px;">
+                        <button class="btn-success" onclick="updatePointName(${point.id})" style="width: 100%;">تعديل الاسم</button>
+                    </div>
+                    <button class="btn-danger" onclick="deletePoint(${point.id})" style="width: 100%;">حذف الموقع</button>
+                </div>
+            `;
+
             if (point.type === 'cabinet') {
-                var marker = L.marker([point.lat, point.lng]).addTo(map);
-                marker.bindPopup(`<b>كابينة: ${point.name}</b><br>الإحداثيات: ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`);
+                marker = L.marker([point.lat, point.lng]).addTo(map);
                 cabCount++;
             } else {
-                var marker = L.circleMarker([point.lat, point.lng], {
+                marker = L.circleMarker([point.lat, point.lng], {
                     color: 'green',
                     fillColor: '#22c55e',
                     fillOpacity: 0.8,
                     radius: 8
                 }).addTo(map);
-                marker.bindPopup(`<b>مشترك: ${point.name}</b><br>الإحداثيات: ${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`);
                 subCount++;
             }
+
+            marker.bindPopup(popupContent);
+            markersMap[point.id] = marker;
             updateCounters();
         }
 
@@ -141,28 +185,40 @@
             if (!error && data) {
                 cabCount = 0;
                 subCount = 0;
+                markersMap = {};
                 data.forEach(point => renderPoint(point));
             }
         }
 
         fetchPointsFromCloud();
 
-        // 4. تفعيل الاستماع الفوري (Realtime) لتحديث النقاط على الشاشة تلقائياً
+        // 4. الاستماع الفوري للتغيرات (إضافة، تعديل، حذف)
         _supabase
             .channel('public:points')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'points' }, payload => {
                 renderPoint(payload.new);
             })
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'points' }, payload => {
+                renderPoint(payload.new);
+            })
+            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'points' }, payload => {
+                let deletedId = payload.old.id;
+                if (markersMap[deletedId]) {
+                    map.removeLayer(markersMap[deletedId]);
+                    // إعادة حساب العدادات بناء على نوع العنصر المحذوف
+                    fetchPointsFromCloud(); // الطريقة الأبسط والأضمن لتحديث العدادات بدقة
+                }
+            })
             .subscribe();
 
-        // 5. حدث النقر على الخريطة لإضافة موقع جديد وحفظه سحابياً
+        // 5. حدث النقر على الخريطة لإضافة موقع جديد
         map.on('click', function(e) {
             var lat = e.latlng.lat;
             var lng = e.latlng.lng;
 
             var formHtml = `
                 <div style="font-family: Arial; direction: rtl; text-align: right; min-width: 200px;">
-                    <h4 style="margin: 0 0 10px 0; color: #1e293b;">إضافة موقع جديد (لحظي)</h4>
+                    <h4 style="margin: 0 0 10px 0; color: #1e293b;">إضافة موقع جديد</h4>
                     <form onsubmit="addNewPointToCloud(event, ${lat}, ${lng})">
                         <label style="font-size: 13px; font-weight: bold;">نوع الموقع:</label><br>
                         <select id="input-type" style="width: 100%; padding: 6px; margin-top: 4px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ccc;">
@@ -184,25 +240,62 @@
                 .openOn(map);
         });
 
-        // 6. دالة إرسال البيانات مباشرة إلى جدول Supabase
+        // دالة حفظ نقطة جديدة
         window.addNewPointToCloud = async function(event, lat, lng) {
             event.preventDefault();
-            
             var type = document.getElementById('input-type').value;
             var name = document.getElementById('input-name').value;
 
-            let newPoint = { type, name, lat, lng };
-
-            const { error } = await _supabase.from('points').insert([newPoint]);
-
+            const { error } = await _supabase.from('points').insert([{ type, name, lat, lng }]);
             if (error) {
-                alert('حدث خطأ أثناء الحفظ بالسحابة: ' + error.message);
+                alert('خطأ أثناء الحفظ: ' + error.message);
             } else {
                 map.closePopup();
             }
         };
 
-        // 7. نظام تتبع عمال الصيانة الحي
+        // 6. دالة تعديل اسم النقطة
+        window.updatePointName = async function(id) {
+            var newName = document.getElementById(`edit-name-${id}`).value;
+            if (!newName) {
+                alert('الرجاء إدخال اسم صحيح');
+                return;
+            }
+
+            const { error } = await _supabase
+                .from('points')
+                .update({ name: newName })
+                .eq('id', id);
+
+            if (error) {
+                alert('خطأ أثناء التعديل: ' + error.message);
+            } else {
+                map.closePopup();
+            }
+        };
+
+        // 7. دالة حذف النقطة
+        window.deletePoint = async function(id) {
+            if (!confirm('هل أنت متأكد من حذف هذا الموقع نهائياً؟')) return;
+
+            const { error } = await _supabase
+                .from('points')
+                .delete()
+                .eq('id', id);
+
+            if (error) {
+                alert('خطأ أثناء الحذف: ' + error.message);
+            } else {
+                if (markersMap[id]) {
+                    map.removeLayer(markersMap[id]);
+                    delete markersMap[id];
+                }
+                map.closePopup();
+                fetchPointsFromCloud();
+            }
+        };
+
+        // 8. نظام تتبع عمال الصيانة الحي
         let techMarker = null;
         let watchId = null;
 
