@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة وتتبع شبكة الإنترنت - مستقر ومزامن</title>
+    <title>نظام إدارة وتتبع شبكة الإنترنت - تتبع مسار حركة العمال</title>
     <!-- استدعاء مكتبة Leaflet للخرائط -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -101,7 +101,6 @@
             font-weight: bold;
             font-size: 12px;
         }
-        /* أيقونة مخصصة وثابتة لموقع عامل الصيانة لتجنب التذبذب عند الزوم */
         .worker-marker-icon {
             background-color: #ef4444;
             border: 3px solid #ffffff;
@@ -112,7 +111,7 @@
 </head>
 <body>
 
-    <div id="header">لوحة التحكم - إدارة الشبكة التزامن المستمر</div>
+    <div id="header">لوحة التحكم - إدارة وتتبع مسارات حركة العمال</div>
     
     <div id="main-container">
         <!-- الشريط الجانبي للإحصائيات وأدوات التصفية -->
@@ -129,7 +128,7 @@
 
             <hr style="border: 0; border-top: 1px solid #cbd5e1;">
 
-            <!-- قسم تصفية العرض (Filters) -->
+            <!-- قسم تصفية العرض -->
             <h4>تصفية العرض</h4>
             <div class="filter-container">
                 <button id="filter-all" class="btn-filter active" onclick="setFilter('all')">الكل</button>
@@ -139,8 +138,9 @@
 
             <hr style="border: 0; border-top: 1px solid #cbd5e1;">
 
-            <h4>نظام تتبع العمال</h4>
-            <button class="btn-primary" onclick="startLiveTracking()">بدء تتبعي الميداني (GPS)</button>
+            <h4>نظام تتبع العمال ورسم المسار</h4>
+            <button class="btn-primary" onclick="startLiveTracking()">بدء تتبعي وتسجيل مساري (GPS)</button>
+            <button class="btn-danger" style="margin-top: 5px; width: 100%;" onclick="clearWorkerRoute()">مسح سجل المسار من الخريطة</button>
             <div id="tracking-status" style="font-size: 12px; color: #047857; font-weight: bold; margin-top: 5px;"></div>
         </div>
 
@@ -164,10 +164,14 @@
             attribution: '© OpenStreetMap contributors'
         }).addTo(map);
 
-        let allPoints = []; // تخزين جميع النقاط محلياً
-        let markersMap = {}; // مرجع لكل علامة عبر الـ ID
+        let allPoints = []; 
+        let markersMap = {}; 
         let currentFilter = 'all'; 
         let realtimeChannel = null;
+
+        // متغيرات تتبع المسار
+        let routeCoordinates = [];
+        let routePolyline = L.polyline([], { color: '#0284c7', weight: 4, opacity: 0.8 }).addTo(map);
 
         function updateCounters() {
             let cabs = allPoints.filter(p => p.type === 'cabinet').length;
@@ -228,7 +232,7 @@
             markersMap[point.id] = marker;
         }
 
-        // 3. جلب البيانات الأولية من السحابة
+        // 3. جلب نقاط الكابينات والمشتركين
         async function fetchPointsFromCloud() {
             let { data, error } = await _supabase.from('points').select('*');
             if (!error && data) {
@@ -237,48 +241,47 @@
             }
         }
 
-        // 4. تفعيل وربط الـ Realtime
+        // 4. جلب مسار حركة العمال من السحابة ورسم الخط الأزرق
+        async function fetchWorkerRouteFromCloud() {
+            let { data, error } = await _supabase.from('worker_locations').select('*').order('created_at', { ascending: true });
+            if (!error && data) {
+                routeCoordinates = data.map(item => [item.lat, item.lng]);
+                routePolyline.setLatLngs(routeCoordinates);
+            }
+        }
+
+        // 5. تفعيل وربط الـ Realtime لنقاط الخريطة والمسار اللحظي
         function initRealtimeSubscription() {
             if (realtimeChannel) {
                 _supabase.removeChannel(realtimeChannel);
             }
 
             realtimeChannel = _supabase
-                .channel('public:points')
-                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'points' }, payload => {
-                    allPoints.push(payload.new);
-                    refreshMapMarkers();
+                .channel('public:all_changes')
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'points' }, () => {
+                    fetchPointsFromCloud();
                 })
-                .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'points' }, payload => {
-                    let index = allPoints.findIndex(p => p.id === payload.new.id);
-                    if (index !== -1) allPoints[index] = payload.new;
-                    refreshMapMarkers();
-                })
-                .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'points' }, payload => {
-                    allPoints = allPoints.filter(p => p.id !== payload.old.id);
-                    refreshMapMarkers();
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'worker_locations' }, payload => {
+                    let newLoc = [payload.new.lat, payload.new.lng];
+                    routeCoordinates.push(newLoc);
+                    routePolyline.setLatLngs(routeCoordinates);
                 })
                 .subscribe();
         }
 
-        // تشغيل الجلب التلقائي والاشتراك اللحظي
         fetchPointsFromCloud();
+        fetchWorkerRouteFromCloud();
         initRealtimeSubscription();
 
-        // 🟢 معالجة مشكلة قفل الشاشة وخمول الجهاز: إعادة الجلب والربط فور إعادة فتح الشاشة
         document.addEventListener('visibilitychange', function() {
             if (document.visibilityState === 'visible') {
                 fetchPointsFromCloud();
+                fetchWorkerRouteFromCloud();
                 initRealtimeSubscription();
             }
         });
 
-        window.addEventListener('focus', function() {
-            fetchPointsFromCloud();
-            initRealtimeSubscription();
-        });
-
-        // 5. حدث النقر على الخريطة لإضافة موقع جديد
+        // 6. حدث النقر على الخريطة للإضافة
         map.on('click', function(e) {
             var lat = e.latlng.lat;
             var lng = e.latlng.lng;
@@ -322,43 +325,24 @@
 
         window.updatePointName = async function(id) {
             var newName = document.getElementById(`edit-name-${id}`).value;
-            if (!newName) {
-                alert('الرجاء إدخال اسم صحيح');
-                return;
-            }
+            if (!newName) return;
 
-            const { error } = await _supabase
-                .from('points')
-                .update({ name: newName })
-                .eq('id', id);
-
-            if (error) {
-                alert('خطأ أثناء التعديل: ' + error.message);
-            } else {
-                map.closePopup();
-            }
+            const { error } = await _supabase.from('points').update({ name: newName }).eq('id', id);
+            if (!error) map.closePopup();
         };
 
         window.deletePoint = async function(id) {
             if (!confirm('هل أنت متأكد من حذف هذا الموقع نهائياً؟')) return;
-
-            const { error } = await _supabase
-                .from('points')
-                .delete()
-                .eq('id', id);
-
-            if (error) {
-                alert('خطأ أثناء الحذف: ' + error.message);
-            } else {
-                map.closePopup();
-            }
+            const { error } = await _supabase.from('points').delete().eq('id', id);
+            if (!error) map.closePopup();
         };
 
-        // 6. نظام تتبع عمال الصيانة الحي (مستقر وبدون اهتزاز عند الزوم)
+        // 7. نظام تتبع ورسم مسار العامل بالـ GPS وحفظه سحابياً
         let techMarker = null;
         let watchId = null;
+        let lastSavedLat = null;
+        let lastSavedLng = null;
 
-        // أيقونة ثابتة الحجم تمنع التذبذب والقفز عند Zoom
         const workerIcon = L.divIcon({
             className: 'worker-marker-icon',
             iconSize: [16, 16],
@@ -371,15 +355,16 @@
                 return;
             }
 
-            document.getElementById('tracking-status').innerText = "جاري الاتصال بالأقمار الصناعية وتحديد الموقع...";
+            document.getElementById('tracking-status').innerText = "جاري الاتصال بالأقمار الصناعية وتحديد المسار...";
 
             watchId = navigator.geolocation.watchPosition(
-                function(position) {
+                async function(position) {
                     let lat = position.coords.latitude;
                     let lng = position.coords.longitude;
 
-                    document.getElementById('tracking-status').innerText = "🟢 التتبع نشط: يتم تحديث الموقع بنجاح";
+                    document.getElementById('tracking-status').innerText = "🟢 التتبع وحفظ المسار نشط الآن";
 
+                    // رسم/تحديث موقع العامل المباشر
                     if (!techMarker) {
                         techMarker = L.marker([lat, lng], { icon: workerIcon }).addTo(map);
                         techMarker.bindPopup("<b>عامل الصيانة (أنت)</b><br>الموقع الميداني الحالي").openPopup();
@@ -387,16 +372,32 @@
                     } else {
                         techMarker.setLatLng([lat, lng]);
                     }
+
+                    // حفظ النقطة في السحابة فقط إذا تحرك العامل أكثر من مسافة بسيطة (لتسجيل المسار)
+                    if (!lastSavedLat || Math.abs(lat - lastSavedLat) > 0.0001 || Math.abs(lng - lastSavedLng) > 0.0001) {
+                        lastSavedLat = lat;
+                        lastSavedLng = lng;
+                        
+                        await _supabase.from('worker_locations').insert([{ lat, lng }]);
+                    }
                 },
                 function(error) {
-                    document.getElementById('tracking-status').innerText = "❌ تعذر الحصول على الموقع. تأكد من السماح للمتصفح بالوصول للـ GPS.";
+                    document.getElementById('tracking-status').innerText = "❌ تعذر الحصول على الموقع. تأكد من تفعيل الـ GPS.";
                 },
-                {
-                    enableHighAccuracy: true,
-                    maximumAge: 1000,
-                    timeout: 10000
-                }
+                { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
             );
+        };
+
+        // مسح سجل المسار
+        window.clearWorkerRoute = async function() {
+            if (!confirm('هل تريد مسح سجل خط المسار بالكامل من السحابة والخريطة؟')) return;
+            
+            const { error } = await _supabase.from('worker_locations').delete().neq('id', 0);
+            if (!error) {
+                routeCoordinates = [];
+                routePolyline.setLatLngs([]);
+                alert('تم مسح سجل المسار بنجاح.');
+            }
         };
     </script>
 </body>
