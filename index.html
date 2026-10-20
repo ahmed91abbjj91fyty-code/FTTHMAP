@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة وتتبع شبكة الإنترنت - السحابي</title>
+    <title>نظام إدارة وتتبع شبكة الإنترنت - السحابي المباشر</title>
     <!-- استدعاء مكتبة Leaflet للخرائط -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -67,14 +67,14 @@
 </head>
 <body>
 
-    <div id="header">لوحة التحكم - متصل بقاعدة البيانات السحابية</div>
+    <div id="header">لوحة التحكم - التزامن اللحظي المباشر</div>
     
     <div id="main-container">
         <!-- الشريط الجانبي للإحصائيات وأدوات التتبع -->
         <div id="sidebar">
             <h3>لوحة الإدارة</h3>
             <p style="font-size: 13px; color: #475569; line-height: 1.4;">
-                البيانات الآن تُحفظ بشكل سحابي وتظهر فوراً لجميع المستخدمين. انقر على الخريطة للإضافة.
+                النقاط تظهر وتتزامن الآن لحظياً بين جميع الأجهزة بدون الحاجة لإعادة تحميل الصفحة.
             </p>
             <div class="stats-box">
                 <p><b>عدد الكابينات:</b> <span id="cab-count">0</span></p>
@@ -95,7 +95,7 @@
     <script>
         // 1. إعدادات الاتصال بقاعدة بيانات Supabase السحابية
         const SUPABASE_URL = 'https://zoqbqaefkyznsxhcaakk.supabase.co';
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvcWJxYWVma3l6bnN4aGNhYWtrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MzYzMDcsImV4cCI6MjEwODAxMjMwN30.drwpDj0CTp766eK3zs4PdYhGGzBmJ_wmVCdPdcJNvW8';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvcWJxYWVma3l6bnN4aGNhYWtrIksicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0MzYzMDcsImV4cCI6MjEwODAxMjMwN30.drwpDj0CTp766eK3zs4PdYhGGzBmJ_wmVCdPdcJNvW8';
 
         const { createClient } = supabase;
         const _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -135,12 +135,10 @@
             updateCounters();
         }
 
-        // 3. جلب البيانات من السحابة عند تحميل الصفحة
+        // 3. جلب البيانات الأولية عند تحميل الصفحة
         async function fetchPointsFromCloud() {
             let { data, error } = await _supabase.from('points').select('*');
-            if (error) {
-                console.error('خطأ في جلب البيانات:', error);
-            } else {
+            if (!error && data) {
                 cabCount = 0;
                 subCount = 0;
                 data.forEach(point => renderPoint(point));
@@ -149,14 +147,22 @@
 
         fetchPointsFromCloud();
 
-        // 4. حدث النقر على الخريطة لإضافة موقع جديد وحفظه سحابياً
+        // 4. تفعيل الاستماع الفوري (Realtime) لتحديث النقاط على الشاشة تلقائياً
+        _supabase
+            .channel('public:points')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'points' }, payload => {
+                renderPoint(payload.new);
+            })
+            .subscribe();
+
+        // 5. حدث النقر على الخريطة لإضافة موقع جديد وحفظه سحابياً
         map.on('click', function(e) {
             var lat = e.latlng.lat;
             var lng = e.latlng.lng;
 
             var formHtml = `
                 <div style="font-family: Arial; direction: rtl; text-align: right; min-width: 200px;">
-                    <h4 style="margin: 0 0 10px 0; color: #1e293b;">إضافة موقع جديد (سحابي)</h4>
+                    <h4 style="margin: 0 0 10px 0; color: #1e293b;">إضافة موقع جديد (لحظي)</h4>
                     <form onsubmit="addNewPointToCloud(event, ${lat}, ${lng})">
                         <label style="font-size: 13px; font-weight: bold;">نوع الموقع:</label><br>
                         <select id="input-type" style="width: 100%; padding: 6px; margin-top: 4px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ccc;">
@@ -167,7 +173,7 @@
                         <label style="font-size: 13px; font-weight: bold;">الاسم / الرمز:</label><br>
                         <input type="text" id="input-name" required placeholder="مثال: C-102 أو محمد كريم" style="width: 100%; padding: 6px; margin-top: 4px; margin-bottom: 12px; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box;"><br>
                         
-                        <button type="submit" style="background: #2563eb; color: white; border: none; padding: 8px 14px; cursor: pointer; border-radius: 4px; width: 100%; font-weight: bold;">حفظ في السحابة</button>
+                        <button type="submit" style="background: #2563eb; color: white; border: none; padding: 8px 14px; cursor: pointer; border-radius: 4px; width: 100%; font-weight: bold;">حفظ ونشر مباشر</button>
                     </form>
                 </div>
             `;
@@ -178,7 +184,7 @@
                 .openOn(map);
         });
 
-        // 5. دالة إرسال البيانات مباشرة إلى جدول Supabase
+        // 6. دالة إرسال البيانات مباشرة إلى جدول Supabase
         window.addNewPointToCloud = async function(event, lat, lng) {
             event.preventDefault();
             
@@ -187,18 +193,16 @@
 
             let newPoint = { type, name, lat, lng };
 
-            // إدخال البيانات في جدول points في Supabase
-            const { data, error } = await _supabase.from('points').insert([newPoint]);
+            const { error } = await _supabase.from('points').insert([newPoint]);
 
             if (error) {
                 alert('حدث خطأ أثناء الحفظ بالسحابة: ' + error.message);
             } else {
-                renderPoint(newPoint);
                 map.closePopup();
             }
         };
 
-        // 6. نظام تتبع عمال الصيانة الحي
+        // 7. نظام تتبع عمال الصيانة الحي
         let techMarker = null;
         let watchId = null;
 
